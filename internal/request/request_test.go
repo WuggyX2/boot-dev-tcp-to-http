@@ -120,10 +120,6 @@ func TestHeaderParsing(t *testing.T) {
 			expectError:     true,
 		},
 		{
-			// Note: Behavior depends on implementation.
-			// Simple maps overwrite (Last-Write-Wins).
-			// Compliant HTTP parsers should merge with commas: "val1, val2".
-			// Assuming Overwrite behavior for this test based on map[string]string usage.
 			name:  "Duplicate Headers",
 			input: "GET / HTTP/1.1\r\nHost: localhost\r\nX-Custom: value1\r\nX-Custom: value2\r\n\r\n",
 			expectedHeaders: map[string]string{
@@ -182,6 +178,80 @@ func TestHeaderParsing(t *testing.T) {
 				if len(tc.expectedHeaders) == 0 {
 					assert.Empty(t, r.Headers)
 				}
+			}
+		})
+	}
+}
+
+func TestRequestBodyParsing(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedBody string
+		expectError  bool
+	}{
+		{
+			name: "Standard Body",
+			input: "POST / HTTP/1.1\r\n" +
+				"Host: localhost\r\n" +
+				"Content-Length: 5\r\n" +
+				"\r\n" +
+				"hello",
+			expectedBody: "hello",
+			expectError:  false,
+		},
+		{
+			name: "Empty Body, 0 reported content length",
+			input: "POST / HTTP/1.1\r\n" +
+				"Host: localhost\r\n" +
+				"Content-Length: 0\r\n" +
+				"\r\n",
+			expectedBody: "",
+			expectError:  false,
+		},
+		{
+			name: "Empty Body, no reported content length",
+			input: "GET / HTTP/1.1\r\n" +
+				"Host: localhost\r\n" +
+				"\r\n",
+			expectedBody: "",
+			expectError:  false,
+		},
+		{
+			name: "Body shorter than reported content length",
+			input: "POST / HTTP/1.1\r\n" +
+				"Host: localhost\r\n" +
+				"Content-Length: 10\r\n" +
+				"\r\n" +
+				"short",
+			expectedBody: "",
+			expectError:  true,
+		},
+		{
+			name: "No Content-Length but Body Exists",
+			input: "POST / HTTP/1.1\r\n" +
+				"Host: localhost\r\n" +
+				"\r\n" +
+				"body",
+			expectedBody: "",
+			expectError:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &chunkReader{
+				data:            tc.input,
+				numBytesPerRead: 3,
+			}
+			r, err := RequestFromReader(reader)
+
+			if tc.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, r)
+				assert.Equal(t, tc.expectedBody, string(r.Body))
 			}
 		})
 	}

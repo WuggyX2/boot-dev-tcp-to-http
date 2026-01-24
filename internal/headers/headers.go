@@ -76,6 +76,12 @@ func (h Headers) Set(key, val string) {
 	h[key] = val
 }
 
+func (h Headers) Get(key string) (string, bool) {
+	key = strings.ToLower(key)
+	val, ok := h[key]
+	return val, ok
+}
+
 func validateTokens(tokens string) bool {
 	for _, token := range tokens {
 		if isTokenTable[token] == 0 {

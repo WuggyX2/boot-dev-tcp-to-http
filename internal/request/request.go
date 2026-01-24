@@ -6,6 +6,7 @@ import (
 	"httpfromtcp/internal/headers"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -20,6 +21,7 @@ type RequestState int
 const (
 	Initialized RequestState = iota
 	ParsingHeaders
+	ParsingBody
 	Done
 )
 
@@ -27,6 +29,8 @@ type Request struct {
 	RequestLine RequestLine
 	State       RequestState
 	Headers     headers.Headers
+	Body        []byte
+	bodyReadInt int
 }
 
 type RequestLine struct {
@@ -72,7 +76,6 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 		r.State = ParsingHeaders
 		return bytesRead, nil
 	case ParsingHeaders:
-
 		bytesRead, done, err := r.Headers.Parse(data)
 
 		if err != nil {
@@ -80,13 +83,39 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 		}
 
 		if done {
-			r.State = Done
+			r.State = ParsingBody
 		}
 
 		return bytesRead, nil
 
 	case Done:
 		return 0, errors.New("Trying to read data in done state")
+	case ParsingBody:
+		contentLength, ok := r.Headers.Get("Content-Length")
+
+		if !ok {
+			r.State = Done
+			return len(data), nil
+		}
+
+		contentLen, err := strconv.Atoi(contentLength)
+
+		if err != nil {
+			return 0, errors.New("Cannot convert Content-Length header to a integer")
+		}
+
+		r.Body = slices.Concat(r.Body, data)
+		r.bodyReadInt += len(data)
+
+		if r.bodyReadInt > contentLen {
+			return len(r.Body), errors.New("Request body is longer than stated in Content-Length header")
+		}
+
+		if r.bodyReadInt == contentLen {
+			r.State = Done
+		}
+
+		return len(data), nil
 
 	default:
 		return 0, errors.New("Error: Unknown State")
@@ -101,6 +130,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := Request{
 		State:   Initialized,
 		Headers: headers.NewHeaders(),
+		Body:    make([]byte, 0),
 	}
 
 	for req.State != Done {
