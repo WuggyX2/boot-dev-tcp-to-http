@@ -3,6 +3,7 @@ package request
 import (
 	"bytes"
 	"errors"
+	"httpfromtcp/internal/headers"
 	"io"
 	"slices"
 	"strings"
@@ -18,12 +19,14 @@ type RequestState int
 
 const (
 	Initialized RequestState = iota
+	ParsingHeaders
 	Done
 )
 
 type Request struct {
 	RequestLine RequestLine
 	State       RequestState
+	Headers     headers.Headers
 }
 
 type RequestLine struct {
@@ -33,11 +36,28 @@ type RequestLine struct {
 }
 
 func (r *Request) parse(data []byte) (int, error) {
-	if r.State == Done {
-		return 0, errors.New("Trying to read data in done state")
+	totalBytesParsed := 0
+	for r.State != Done {
+		bytesRead, err := r.parseSingle(data[totalBytesParsed:])
+
+		if err != nil {
+			return 0, err
+		}
+
+		if bytesRead == 0 {
+			break
+		}
+
+		totalBytesParsed += bytesRead
 	}
 
-	if r.State == Initialized {
+	return totalBytesParsed, nil
+
+}
+
+func (r *Request) parseSingle(data []byte) (int, error) {
+	switch r.State {
+	case Initialized:
 		bytesRead, reqLine, err := parseLineRequest(data)
 
 		if err != nil {
@@ -49,12 +69,28 @@ func (r *Request) parse(data []byte) (int, error) {
 		}
 
 		r.RequestLine = *reqLine
-		r.State = Done
+		r.State = ParsingHeaders
+		return bytesRead, nil
+	case ParsingHeaders:
+
+		bytesRead, done, err := r.Headers.Parse(data)
+
+		if err != nil {
+			return 0, err
+		}
+
+		if done {
+			r.State = Done
+		}
 
 		return bytesRead, nil
-	}
 
-	return 0, errors.New("Error: Unknown State")
+	case Done:
+		return 0, errors.New("Trying to read data in done state")
+
+	default:
+		return 0, errors.New("Error: Unknown State")
+	}
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
@@ -63,7 +99,8 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	readToIndex := 0
 
 	req := Request{
-		State: Initialized,
+		State:   Initialized,
+		Headers: headers.NewHeaders(),
 	}
 
 	for req.State != Done {
@@ -75,8 +112,15 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			buf = newBuffer
 		}
 
-		bytesRead, readErr := reader.Read(buf[readToIndex:])
+		bytesRead, err := reader.Read(buf[readToIndex:])
 		readToIndex += bytesRead
+
+		if errors.Is(err, io.EOF) {
+			if req.State != Done {
+				return nil, errors.New("Incomplete request")
+			}
+			break
+		}
 
 		processedBytes, err := req.parse(buf[:readToIndex])
 
@@ -89,11 +133,6 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			copy(buf, buf[processedBytes:readToIndex])
 
 			readToIndex = remaining
-		}
-
-		if readErr == io.EOF {
-			req.State = Done
-			break
 		}
 	}
 

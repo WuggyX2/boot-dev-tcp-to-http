@@ -89,3 +89,100 @@ func TestRequestLineParse(t *testing.T) {
 	_, err = RequestFromReader(reader)
 	require.Error(t, err)
 }
+
+func TestHeaderParsing(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		expectedHeaders map[string]string
+		expectError     bool
+	}{
+		{
+			name:  "Standard Headers",
+			input: "GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
+			expectedHeaders: map[string]string{
+				"host":       "localhost:42069",
+				"user-agent": "curl/7.81.0", // Fixed version number from your original code to match input
+				"accept":     "*/*",
+			},
+			expectError: false,
+		},
+		{
+			name:            "Empty Headers",
+			input:           "GET / HTTP/1.1\r\n\r\n",
+			expectedHeaders: map[string]string{}, // Should be empty, not nil
+			expectError:     false,
+		},
+		{
+			name:            "Malformed Header",
+			input:           "GET / HTTP/1.1\r\nHost localhost:42069\r\n\r\n", // Missing colon
+			expectedHeaders: nil,
+			expectError:     true,
+		},
+		{
+			// Note: Behavior depends on implementation.
+			// Simple maps overwrite (Last-Write-Wins).
+			// Compliant HTTP parsers should merge with commas: "val1, val2".
+			// Assuming Overwrite behavior for this test based on map[string]string usage.
+			name:  "Duplicate Headers",
+			input: "GET / HTTP/1.1\r\nHost: localhost\r\nX-Custom: value1\r\nX-Custom: value2\r\n\r\n",
+			expectedHeaders: map[string]string{
+				"host":     "localhost",
+				"x-custom": "value1, value2",
+			},
+			expectError: false,
+		},
+		{
+			name:  "Case Insensitive Headers",
+			input: "GET / HTTP/1.1\r\nHOST: localhost\r\nconTENT-tYPe: text/plain\r\n\r\n",
+			expectedHeaders: map[string]string{
+				"host":         "localhost",  // Keys should be normalized (usually lowercase)
+				"content-type": "text/plain", // Keys should be normalized
+			},
+			expectError: false,
+		},
+		{
+			name:            "Missing End of Headers",
+			input:           "GET / HTTP/1.1\r\nHost: localhost\r\nUser-Agent: curl/7.81.0", // No \r\n\r\n
+			expectedHeaders: nil,
+			expectError:     true,
+		},
+		{
+			name:  "Whitespace Handling",
+			input: "GET / HTTP/1.1\r\nHost:   localhost   \r\n\r\n",
+			expectedHeaders: map[string]string{
+				"host": "localhost", // Values should be trimmed
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Initialize your chunk reader
+			reader := &chunkReader{
+				data:            tc.input,
+				numBytesPerRead: 3, // Simulate fragmented reading
+			}
+
+			r, err := RequestFromReader(reader)
+
+			if tc.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, r)
+
+				// Iterate over expected headers and verify they exist in the result
+				for k, v := range tc.expectedHeaders {
+					assert.Equal(t, v, r.Headers[k], "Header mismatch for key: "+k)
+				}
+
+				// specific check for Empty Headers case
+				if len(tc.expectedHeaders) == 0 {
+					assert.Empty(t, r.Headers)
+				}
+			}
+		})
+	}
+}
