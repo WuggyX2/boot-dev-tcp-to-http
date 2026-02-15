@@ -1,16 +1,19 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
-	response "httpfromtcp/internal/internal"
+	"httpfromtcp/internal/request"
+	"httpfromtcp/internal/response"
 	"log"
 	"net"
 	"sync/atomic"
 )
 
 type Server struct {
-	ln   net.Listener
-	open atomic.Bool
+	ln      net.Listener
+	open    atomic.Bool
+	handler Handler
 }
 
 func (s *Server) Close() error {
@@ -40,19 +43,40 @@ func (s *Server) listen() {
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
-	headers := response.GetDefaultHeaders(0)
+	req, err := request.RequestFromReader(conn)
+
+	if err != nil {
+		hErr := &HandlerError{
+			StatusCode: response.BadRequest,
+			Message:    err.Error(),
+		}
+		hErr.Write(conn)
+		return
+	}
+
+	buf := bytes.NewBuffer([]byte{})
+	hErr := s.handler(buf, req)
+
+	if hErr != nil {
+		hErr.Write(conn)
+		return
+	}
+
+	body := buf.Bytes()
+	headers := response.GetDefaultHeaders(len(body))
 	response.WriteStatusLine(conn, response.Ok)
 	response.WriteHeaders(conn, headers)
+	conn.Write(body)
 }
 
-func Serve(port int) (*Server, error) {
+func Serve(port int, handler Handler) (*Server, error) {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 
 	if err != nil {
 		return nil, err
 	}
 
-	server := Server{ln: ln, open: atomic.Bool{}}
+	server := Server{ln: ln, open: atomic.Bool{}, handler: handler}
 	server.open.Store(true)
 	go server.listen()
 
