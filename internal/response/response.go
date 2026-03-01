@@ -15,6 +15,10 @@ const (
 	InternalServerError
 )
 
+type Writer struct {
+	writer io.Writer
+}
+
 func (s StatusCode) Code() int {
 	switch s {
 	case Ok:
@@ -42,8 +46,8 @@ func (s StatusCode) String() string {
 	}
 }
 
-func WriteStatusLine(w io.Writer, statusCode StatusCode) error {
-	_, err := fmt.Fprintf(w, "HTTP/1.1 %d %s\r\n", statusCode.Code(), statusCode.String())
+func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
+	_, err := fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", statusCode.Code(), statusCode.String())
 	return err
 }
 
@@ -57,15 +61,24 @@ func GetDefaultHeaders(contentLen int) headers.Headers {
 	return headers
 }
 
-func WriteHeaders(w io.Writer, headers headers.Headers) error {
+func (w *Writer) WriteHeaders(headers headers.Headers) error {
 	for key, val := range headers {
-		_, err := fmt.Fprintf(w, "%s: %s\r\n", key, val)
+		_, err := fmt.Fprintf(w.writer, "%s: %s\r\n", key, val)
 
 		if err != nil {
 			return err
 		}
 	}
 
-	_, err := fmt.Fprint(w, "\r\n")
+	_, err := fmt.Fprint(w.writer, "\r\n")
 	return err
+}
+
+func (w *Writer) WriteBody(p []byte) (int, error) {
+
+	return 0, nil
+}
+
+func NewWriter(w io.Writer) *Writer {
+	return &Writer{writer: w}
 }

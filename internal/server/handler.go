@@ -20,4 +20,4 @@ func (herr HandlerError) Write(w io.Writer) error {
 	return err
 }
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
