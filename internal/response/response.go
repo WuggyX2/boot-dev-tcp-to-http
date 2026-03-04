@@ -1,6 +1,7 @@
 package response
 
 import (
+	"errors"
 	"fmt"
 	"httpfromtcp/internal/headers"
 	"io"
@@ -8,6 +9,7 @@ import (
 )
 
 type StatusCode int
+type WriterState int
 
 const (
 	Ok StatusCode = iota
@@ -15,8 +17,15 @@ const (
 	InternalServerError
 )
 
+const (
+	WritingStatusLine = iota
+	WritingHeaders
+	WritingBody
+)
+
 type Writer struct {
-	writer io.Writer
+	writer      io.Writer
+	writerState WriterState
 }
 
 func (s StatusCode) Code() int {
@@ -47,7 +56,15 @@ func (s StatusCode) String() string {
 }
 
 func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
+	if w.writerState != WritingStatusLine {
+		return errors.New("Writer state is not WritingStatusLine, call methods in the correct order")
+	}
 	_, err := fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", statusCode.Code(), statusCode.String())
+
+	if err == nil {
+		w.writerState = WritingHeaders
+	}
+
 	return err
 }
 
@@ -62,6 +79,10 @@ func GetDefaultHeaders(contentLen int) headers.Headers {
 }
 
 func (w *Writer) WriteHeaders(headers headers.Headers) error {
+	if w.writerState != WritingHeaders {
+		return errors.New("Writer state is not WritingHeaders, call methods in the correct order")
+	}
+
 	for key, val := range headers {
 		_, err := fmt.Fprintf(w.writer, "%s: %s\r\n", key, val)
 
@@ -71,14 +92,28 @@ func (w *Writer) WriteHeaders(headers headers.Headers) error {
 	}
 
 	_, err := fmt.Fprint(w.writer, "\r\n")
+
+	if err == nil {
+		w.writerState = WritingBody
+	}
+
 	return err
 }
 
 func (w *Writer) WriteBody(p []byte) (int, error) {
+	if w.writerState != WritingBody {
+		return 0, errors.New("Writer state is not WritingBody, call methods in the correct order")
+	}
 
-	return 0, nil
+	bytesWritten, err := w.writer.Write(p)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return bytesWritten, nil
 }
 
 func NewWriter(w io.Writer) *Writer {
-	return &Writer{writer: w}
+	return &Writer{writer: w, writerState: WritingStatusLine}
 }

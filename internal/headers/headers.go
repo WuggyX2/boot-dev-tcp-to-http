@@ -76,6 +76,11 @@ func (h Headers) Set(key, val string) {
 	h[key] = val
 }
 
+func (h Headers) Override(key, val string) {
+	key = strings.ToLower(key)
+	h[key] = val
+}
+
 func (h Headers) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
 	val, ok := h[key]
