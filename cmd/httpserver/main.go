@@ -1,12 +1,18 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
+	"httpfromtcp/internal/headers"
 	"httpfromtcp/internal/request"
 	"httpfromtcp/internal/response"
 	"httpfromtcp/internal/server"
@@ -20,6 +26,18 @@ func main() {
 
 		var message string
 		var statusCode response.StatusCode
+
+		if path, ok := strings.CutPrefix(req.RequestLine.RequestTarget, "/httpbin/"); ok {
+			err := proxyHandler(w, path)
+
+			if err != nil {
+				headers := response.GetDefaultHeaders(0)
+				w.WriteStatusLine(response.InternalServerError)
+				w.WriteHeaders(headers)
+				w.WriteBody([]byte(err.Error()))
+			}
+			return
+		}
 
 		switch req.RequestLine.RequestTarget {
 		case "/yourproblem":
@@ -69,4 +87,50 @@ func generateResponseBody(status response.StatusCode, msg string) []byte {
 
 	return []byte(body)
 
+}
+
+func proxyHandler(w *response.Writer, path string) error {
+	headrs := response.GetDefaultHeadersForChunked()
+	headrs.Set("Trailer", "X-Content-SHA256")
+	headrs.Set("Trailer", "X-Content-Length")
+
+	resp, err := http.Get("https://httpbin.org/" + path)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	w.WriteStatusLine(response.Ok)
+	w.WriteHeaders(headrs)
+
+	buf := make([]byte, 1024)
+	fullResponse := []byte{}
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			w.WriteChunkedBody(buf[:n])
+			fullResponse = append(fullResponse, buf[:n]...)
+		}
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	hash := sha256.Sum256(fullResponse)
+
+	trailers := headers.NewHeaders()
+
+	trailers.Set("X-Content-SHA256", fmt.Sprintf("%x", hash))
+	trailers.Set("X-Content-Length", strconv.Itoa(len(fullResponse)))
+
+	w.WriteChunkedBodyDone()
+	w.WriteTrailers(trailers)
+
+	return nil
 }

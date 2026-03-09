@@ -78,6 +78,16 @@ func GetDefaultHeaders(contentLen int) headers.Headers {
 	return headers
 }
 
+func GetDefaultHeadersForChunked() headers.Headers {
+	headers := headers.NewHeaders()
+
+	headers.Set("Connection", "close")
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Transfer-Encoding", "chunked")
+
+	return headers
+}
+
 func (w *Writer) WriteHeaders(headers headers.Headers) error {
 	if w.writerState != WritingHeaders {
 		return errors.New("Writer state is not WritingHeaders, call methods in the correct order")
@@ -112,6 +122,20 @@ func (w *Writer) WriteBody(p []byte) (int, error) {
 	}
 
 	return bytesWritten, nil
+}
+
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+
+	for key, val := range h {
+		_, err := fmt.Fprintf(w.writer, "%s: %s\r\n", key, val)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err := fmt.Fprint(w.writer, "\r\n")
+	return err
 }
 
 func NewWriter(w io.Writer) *Writer {
