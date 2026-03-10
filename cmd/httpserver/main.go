@@ -21,45 +21,7 @@ import (
 const port = 42069
 
 func main() {
-
-	handler := func(w *response.Writer, req *request.Request) {
-
-		var message string
-		var statusCode response.StatusCode
-
-		if path, ok := strings.CutPrefix(req.RequestLine.RequestTarget, "/httpbin/"); ok {
-			err := proxyHandler(w, path)
-
-			if err != nil {
-				headers := response.GetDefaultHeaders(0)
-				w.WriteStatusLine(response.InternalServerError)
-				w.WriteHeaders(headers)
-				w.WriteBody([]byte(err.Error()))
-			}
-			return
-		}
-
-		switch req.RequestLine.RequestTarget {
-		case "/yourproblem":
-			statusCode = response.BadRequest
-			message = "Your request honestly kinda sucked."
-		case "/myproblem":
-			statusCode = response.InternalServerError
-			message = "Okay, you know what? This one is on me."
-		default:
-			statusCode = response.Ok
-			message = "Your request was an absolute banger."
-		}
-
-		body := generateResponseBody(statusCode, message)
-		headers := response.GetDefaultHeaders(len(body))
-		headers.Override("Content-Type", "text/html")
-
-		w.WriteStatusLine(statusCode)
-		w.WriteHeaders(headers)
-		w.WriteBody(body)
-
-	}
+	handler := handleRequest
 
 	server, err := server.Serve(port, handler)
 	if err != nil {
@@ -72,6 +34,40 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 	log.Println("Server gracefully stopped")
+}
+
+func handleRequest(w *response.Writer, req *request.Request) {
+	if path, ok := strings.CutPrefix(req.RequestLine.RequestTarget, "/httpbin/"); ok {
+		if err := proxyHandler(w, path); err != nil {
+			log.Printf("proxy handler error: %v", err)
+			_ = writeErrorResponse(w, response.InternalServerError, err)
+		}
+		return
+	}
+
+	if req.RequestLine.RequestTarget == "/video" {
+		if err := videoHandler(w); err != nil {
+			log.Printf("video handler error: %v", err)
+			_ = writeErrorResponse(w, response.InternalServerError, err)
+		}
+		return
+	}
+
+	statusCode := response.Ok
+	message := "Your request was an absolute banger."
+
+	switch req.RequestLine.RequestTarget {
+	case "/yourproblem":
+		statusCode = response.BadRequest
+		message = "Your request honestly kinda sucked."
+	case "/myproblem":
+		statusCode = response.InternalServerError
+		message = "Okay, you know what? This one is on me."
+	}
+
+	if err := writeHTMLResponse(w, statusCode, message); err != nil {
+		log.Printf("write response error: %v", err)
+	}
 }
 
 func generateResponseBody(status response.StatusCode, msg string) []byte {
@@ -89,6 +85,31 @@ func generateResponseBody(status response.StatusCode, msg string) []byte {
 
 }
 
+func writeHTMLResponse(w *response.Writer, status response.StatusCode, msg string) error {
+	body := generateResponseBody(status, msg)
+	h := response.GetDefaultHeaders(len(body))
+	h.Override("Content-Type", "text/html")
+
+	if err := w.WriteStatusLine(status); err != nil {
+		return err
+	}
+
+	if err := w.WriteHeaders(h); err != nil {
+		return err
+	}
+
+	_, err := w.WriteBody(body)
+	return err
+}
+
+func writeErrorResponse(w *response.Writer, status response.StatusCode, err error) error {
+	if err == nil {
+		return writeHTMLResponse(w, status, status.String())
+	}
+
+	return writeHTMLResponse(w, status, err.Error())
+}
+
 func proxyHandler(w *response.Writer, path string) error {
 	headrs := response.GetDefaultHeadersForChunked()
 	headrs.Set("Trailer", "X-Content-SHA256")
@@ -102,15 +123,22 @@ func proxyHandler(w *response.Writer, path string) error {
 
 	defer resp.Body.Close()
 
-	w.WriteStatusLine(response.Ok)
-	w.WriteHeaders(headrs)
+	if err := w.WriteStatusLine(response.Ok); err != nil {
+		return err
+	}
+
+	if err := w.WriteHeaders(headrs); err != nil {
+		return err
+	}
 
 	buf := make([]byte, 1024)
 	fullResponse := []byte{}
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			w.WriteChunkedBody(buf[:n])
+			if _, writeErr := w.WriteChunkedBody(buf[:n]); writeErr != nil {
+				return writeErr
+			}
 			fullResponse = append(fullResponse, buf[:n]...)
 		}
 		if err == io.EOF {
@@ -129,8 +157,35 @@ func proxyHandler(w *response.Writer, path string) error {
 	trailers.Set("X-Content-SHA256", fmt.Sprintf("%x", hash))
 	trailers.Set("X-Content-Length", strconv.Itoa(len(fullResponse)))
 
-	w.WriteChunkedBodyDone()
-	w.WriteTrailers(trailers)
+	if _, err := w.WriteChunkedBodyDone(); err != nil {
+		return err
+	}
+
+	if err := w.WriteTrailers(trailers); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func videoHandler(w *response.Writer) error {
+	file, err := os.ReadFile("./assets/vim.mp4")
+
+	if err != nil {
+		return err
+	}
+
+	h := response.GetDefaultHeaders(len(file))
+	h.Override("Content-Type", "video/mp4")
+
+	if err := w.WriteStatusLine(response.Ok); err != nil {
+		return err
+	}
+
+	if err := w.WriteHeaders(h); err != nil {
+		return err
+	}
+
+	_, err = w.WriteBody(file)
+	return err
 }
